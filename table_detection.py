@@ -1,9 +1,10 @@
 import cv2
 import numpy as np
+import math
 from utils import scaled_imshow
-from lines import calculate_line_length, calculate_line_angle
+from lines import calculate_line_length, calculate_line_angle, condense_lines
 
-def detect_black_table_threshold_140(image):
+def detect_black_table(image):
     """Detect black pool table using threshold 140 and finding largest black contour"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     v_channel = hsv[:,:,2]
@@ -18,37 +19,30 @@ def detect_black_table_threshold_140(image):
 def find_largest_black_contour(black_mask, original_image):
     """Find the largest black contour and clean it up"""
     
-    # Clean up the mask with morphological operations
-    # First erode to separate nearby black regions
+
+    EROSION_ITERAITIONS = 2
     kernel_erode = np.ones((5,5), np.uint8)
-    eroded = cv2.erode(black_mask, kernel_erode, iterations=2)
-    # scaled_imshow(dilated, 0.25, "Dilated Black Mask")
-    
-    # Then apply closing to fill gaps
-    kernel_close = np.ones((7,7), np.uint8)
-    kernel_open = np.ones((7,7), np.uint8)
-    opened = cv2.morphologyEx(eroded, cv2.MORPH_OPEN, kernel_close, iterations=3)
-    cleaned = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel_open, iterations=1)
-    # scaled_imshow(cleaned, 0.25, "Cleaned Black Mask")
+    eroded = cv2.erode(black_mask, kernel_erode, iterations=EROSION_ITERAITIONS)
+    # cv2.imshow("Eroded", eroded)
+
+    cleaned = eroded.copy()
     
     # Find all contours
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contours:
-        print("No contours found!")
         return None, None, None
     
     # Find the largest contour by area
     largest_contour = max(contours, key=cv2.contourArea)
     largest_area = cv2.contourArea(largest_contour)
     
-    print(f"Found {len(contours)} contours")
-    print(f"Largest contour area: {largest_area}")
     
     # Create mask with only the largest contour
     table_mask = np.zeros_like(cleaned)
     cv2.drawContours(table_mask, [largest_contour], -1, 255, -1)
-    scaled_imshow(table_mask, 0.1, "Largest Black Contour (Table)")
+    #Undo erosion to restore original size
+    table_mask = cv2.dilate(table_mask, kernel_erode, iterations=EROSION_ITERAITIONS)
     
     # Get bounding rectangle
     x, y, w, h = cv2.boundingRect(largest_contour)
@@ -90,39 +84,38 @@ def detect_table_edges_from_contour(table_mask, original_image, min_line_length=
     
     # Find edges of the table region
     edges = cv2.Canny(table_mask, 50, 150)
-    # scaled_imshow(edges, 0.25, "Table Edges")
+    # scaled_imshow(edges, 1, "Table Edges")
     
     # Dilate edges to connect nearby segments
     kernel = np.ones((3,3), np.uint8)
     dilated_edges = cv2.dilate(edges, kernel, iterations=2)
-    scaled_imshow(dilated_edges, 0.1, "Dilated Edges")
+    # scaled_imshow(dilated_edges, 1, "Dilated Edges")
     
     # Find lines using Hough transform
-    lines = cv2.HoughLinesP(dilated_edges, 1, np.pi/180, threshold=50, 
-                           minLineLength=100, maxLineGap=20)
+    lines = cv2.HoughLinesP(dilated_edges, 1, np.pi/180, threshold=200, 
+                           minLineLength=100, maxLineGap=100)
     
     line_image = original_image.copy()
     filtered_lines = []
     
     if lines is not None:
-        print(f"Found {len(lines)} total lines")
-        
+
         # Filter lines by length
         for line in lines:
+            line = line[0]  # Extract the line coordinates
             length = calculate_line_length(line)
             if length >= min_line_length:
                 filtered_lines.append(line)
+
+        # Condense lines by merging close and similar lines
+        #lines = [line[0] for line in filtered_lines]
+        condensed_lines = condense_lines(filtered_lines)
+        condensed_lines = [list(map(int, map(round, line))) for line in condensed_lines]
                 
-        print(f"Filtered to {len(filtered_lines)} lines >= {min_line_length} pixels")
         
-        # Draw all lines in light color
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            cv2.line(line_image, (x1, y1), (x2, y2), (100, 100, 100), 1)
-            
         # Draw filtered lines in bright color
-        for line in filtered_lines:
-            x1, y1, x2, y2 = line[0]
+        for line in condensed_lines:
+            x1, y1, x2, y2 = line
             length = calculate_line_length(line)
             angle = calculate_line_angle(line)
             cv2.line(line_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
@@ -131,8 +124,11 @@ def detect_table_edges_from_contour(table_mask, original_image, min_line_length=
             cv2.putText(line_image, f"{length:.0f}", (mid_x, mid_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
     
-    scaled_imshow(line_image, 0.1, "Filtered Table Edge Lines")
-    return filtered_lines
+    scaled_imshow(line_image, 1, "Filtered Table Edge Lines")
+
+
+    return condensed_lines
+
 
 def main():
     # Load the image
@@ -148,7 +144,7 @@ def main():
     
     scaled_imshow(image, 0.1, "Original Image")
 
-    black_mask = detect_black_table_threshold_140(image)
+    black_mask = detect_black_table(image)
 
     table_mask, bbox, rotated_rect = find_largest_black_contour(black_mask, image)
     
