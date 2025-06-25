@@ -44,7 +44,7 @@ def four_point_transform(image, pts):
 	# (i.e. top-down view) of the image, again specifying points
 	# in the top-left, top-right, bottom-right, and bottom-left
 	# order
-	maxWidth = 300
+	maxWidth = 1000
 	maxHeight = 500
 	dst = np.array([
 		[0, 0],

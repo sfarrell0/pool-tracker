@@ -8,10 +8,10 @@ def detect_black_table(image):
     """Detect black pool table using threshold 140 and finding largest black contour"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     v_channel = hsv[:,:,2]
-    
-    # Create mask for dark areas (below threshold 140)
+
+    # Create mask for dark areas (below threshold 105)
     black_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-    black_mask[v_channel < 140] = 255
+    black_mask[v_channel < 105] = 255
     
     # scaled_imshow(black_mask, 0.25, "Black Areas (< 140)")
     return black_mask
@@ -20,7 +20,7 @@ def find_largest_black_contour(black_mask, original_image):
     """Find the largest black contour and clean it up"""
     
 
-    EROSION_ITERAITIONS = 2
+    EROSION_ITERAITIONS = 6
     kernel_erode = np.ones((5,5), np.uint8)
     eroded = cv2.erode(black_mask, kernel_erode, iterations=EROSION_ITERAITIONS)
     # cv2.imshow("Eroded", eroded)
@@ -44,60 +44,57 @@ def find_largest_black_contour(black_mask, original_image):
     #Undo erosion to restore original size
     table_mask = cv2.dilate(table_mask, kernel_erode, iterations=EROSION_ITERAITIONS)
     
-    # Get bounding rectangle
-    x, y, w, h = cv2.boundingRect(largest_contour)
-    aspect_ratio = w / h
-    
-    # Draw bounding rectangle on original image
-    result_image = original_image.copy()
-    cv2.rectangle(result_image, (x, y), (x+w, y+h), (0, 255, 0), 3)
-    cv2.putText(result_image, f"Table AR: {aspect_ratio:.2f}", 
-               (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-    
-    # scaled_imshow(result_image, 0.25, "Detected Table (Bounding Box)")
-    
-    # Also fit a rotated rectangle for better accuracy
-    rect = cv2.minAreaRect(largest_contour)
-    box = cv2.boxPoints(rect)
-    box = np.int32(box)
-    
-    rotated_result = original_image.copy()
-    cv2.drawContours(rotated_result, [box], 0, (255, 0, 0), 3)
-    
-    # Calculate rotated aspect ratio
-    width, height = rect[1]
-    if width > height:
-        rot_aspect_ratio = width / height
-    else:
-        rot_aspect_ratio = height / width
-        
-    cv2.putText(rotated_result, f"Rotated AR: {rot_aspect_ratio:.2f}", 
-               (int(rect[0][0]), int(rect[0][1])-10), 
-               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-    
-    # scaled_imshow(rotated_result, 0.25, "Rotated Rectangle Fit")
-    
-    return table_mask, (x, y, w, h), rect
+    return table_mask
 
 def detect_table_edges_from_contour(table_mask, original_image, min_line_length=150):
     """Use table contour to detect table edges and filter by length"""
     
     # Find edges of the table region
     edges = cv2.Canny(table_mask, 50, 150)
-    # scaled_imshow(edges, 1, "Table Edges")
+    #scaled_imshow(edges, 1, "Table Edges")
     
     # Dilate edges to connect nearby segments
     kernel = np.ones((3,3), np.uint8)
-    dilated_edges = cv2.dilate(edges, kernel, iterations=2)
-    # scaled_imshow(dilated_edges, 1, "Dilated Edges")
+    dilated_edges = cv2.dilate(edges, kernel, iterations=0)
+
+    # Find contours on the dilated edges
+    contours, _ = cv2.findContours(dilated_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    poly_img = original_image.copy()
+    for cnt in contours:
+        epsilon = 0.02 * cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        cv2.drawContours(poly_img, [approx], -1, (0, 255, 255), 2)
+    cv2.imshow("Polygon Approximation", poly_img)
+    #scaled_imshow(dilated_edges, 1, "Dilated Edges")
+
+    lines_hough = cv2.HoughLines(dilated_edges, 1, np.pi/180, threshold=170)
+    test_img = original_image.copy()
+    lines = []
+    if lines_hough is not None:
+        for line in lines_hough:
+            print(f"Line: {line}")
+            rho, theta = line[0]
+            a = np.cos(theta)
+            b = np.sin(theta)
+            x0 = a * rho
+            y0 = b * rho
+            x1 = int(x0 + 5000 * (-b))
+            y1 = int(y0 + 5000 * (a))
+            x2 = int(x0 - 5000 * (-b))
+            y2 = int(y0 - 5000 * (a))
+            lines.append([[x1, y1, x2, y2]])
+            cv2.line(test_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+    # Display the result
+    cv2.imshow('Detected Lines', test_img)
     
     # Find lines using Hough transform
-    lines = cv2.HoughLinesP(dilated_edges, 1, np.pi/180, threshold=200, 
-                           minLineLength=100, maxLineGap=100)
+    # lines = cv2.HoughLinesP(dilated_edges, 1, np.pi/180, threshold=200, 
+    #                        minLineLength=100, maxLineGap=100)
     
     line_image = original_image.copy()
     filtered_lines = []
-    
+    condensed_lines = []
     if lines is not None:
 
         # Filter lines by length
@@ -124,7 +121,7 @@ def detect_table_edges_from_contour(table_mask, original_image, min_line_length=
             cv2.putText(line_image, f"{length:.0f}", (mid_x, mid_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
     
-    scaled_imshow(line_image, 1, "Filtered Table Edge Lines")
+    #scaled_imshow(line_image, 1, "Filtered Table Edge Lines")
 
 
     return condensed_lines

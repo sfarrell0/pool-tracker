@@ -295,4 +295,3 @@ def find_table_corners_from_edges(table_edges, extension_amount=50, img=None):
                 intersection_points.add((int(intersection_x), int(intersection_y)))
             
     return list(intersection_points) # Convert the set back to a list before returning
-
